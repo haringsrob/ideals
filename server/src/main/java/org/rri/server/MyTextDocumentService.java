@@ -7,8 +7,7 @@ import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.psi.PsiElement;
-import com.intellij.refactoring.rename.RenameUtil;
-import com.intellij.usageView.UsageInfo;
+import com.intellij.refactoring.rename.RenameProcessor;
 import org.eclipse.lsp4j.*;
 import org.eclipse.lsp4j.jsonrpc.messages.Either;
 import org.eclipse.lsp4j.services.TextDocumentService;
@@ -29,7 +28,6 @@ import org.rri.server.util.MiscUtil;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -203,71 +201,37 @@ public class MyTextDocumentService implements TextDocumentService {
   public CompletableFuture<WorkspaceEdit> rename(RenameParams params) {
 
     return CompletableFuture.supplyAsync(() -> {
-          final var ans = new WorkspaceEdit();
-          final var project = session.getProject();
-          final var pos = params.getPosition();
-          final var path = LspPath.fromLspUri(params.getTextDocument().getUri());
-          ApplicationManager.getApplication().invokeAndWait(
-              () -> {
-                MiscUtil.invokeWithPsiFileInReadAction(project, path, (file) -> {
-                      var x = Disposer.newDisposable();
-                      Document doc = MiscUtil.getDocument(file);
-                      if (doc == null) {
-                        return;
-                      }
-                      var targetElementRef = new AtomicReference<PsiElement>();
-                      try {
-                        EditorUtil.withEditor(x, file, pos, editor -> {
-                          var targetElement = TargetElementUtil.findTargetElement(editor, TargetElementUtil.getInstance().getAllAccepted());
-                          targetElementRef.set(targetElement);
-                        });
-                      } finally {
-                        Disposer.dispose(x);
-                      }
-//                      var renamePsiElementProcessorBase =
-//                          RenamePsiElementProcessorBase.forPsiElement(targetElementRef.get());
-//                      var collection = renamePsiElementProcessorBase.findReferences(
-//                          targetElementRef.get(),
-//                          PsiSearchHelper.getInstance(project).getUseScope(targetElementRef.get()),
-//                          false);
-//                      LOG.warn(collection.toString());
-                      var array = RenameUtil.findUsages(targetElementRef.get(),
-                          params.getNewName(),
-                          false, false, Map.of());
-                      for (UsageInfo usageInfo : array) {
-                        var psiFile = usageInfo.getFile();
-                        assert psiFile != null;
-                        var lspPath = LspPath.fromVirtualFile(psiFile.getVirtualFile());
-                        LOG.warn(usageInfo.getNavigationRange().toString());
-                      }
-                      ans.setChanges(Arrays.stream(array).collect(
-                              Collectors.toMap(usageInfo -> {
-                                    var psiFile = usageInfo.getFile();
-                                    assert psiFile != null;
-                                    var lspPath = LspPath.fromVirtualFile(psiFile.getVirtualFile());
-                                    LOG.warn(usageInfo.getNavigationRange().toString());
-                                    return lspPath.toLspUri();
-                                  },
-                                  usageInfo -> {
-                                    var start = MiscUtil.offsetToPosition(doc,
-                                        usageInfo.getNavigationRange().getStartOffset());
-                                    var end = MiscUtil.offsetToPosition(doc,
-                                        usageInfo.getNavigationRange().getEndOffset());
-                                    return List.of(MiscUtil.with(new TextEdit(), textEdit -> {
-                                      textEdit.setRange(new Range(start, end));
-                                      textEdit.setNewText(params.getNewName());
-                                    }));
-                                  },
-                                  (edits, edits2) -> {
-                                    var merge = new ArrayList<>(edits);
-                                    merge.addAll(edits2);
-                                    return merge;
-                                  }
-                              )
-                          )
-                      );
-//                      LOG.warn(Arrays.toString(array));
-                    }
+      final var ans = new WorkspaceEdit();
+      final var project = session.getProject();
+
+      final var pos = params.getPosition();
+      final var path = LspPath.fromLspUri(params.getTextDocument().getUri());
+      ApplicationManager.getApplication().invokeAndWait(
+          () -> {
+            MiscUtil.invokeWithPsiFileInReadAction(project, path, (file) -> {
+                  var x = Disposer.newDisposable();
+                  Document doc = MiscUtil.getDocument(file);
+                  if (doc == null) {
+                    return;
+                  }
+                  var targetElementRef = new AtomicReference<PsiElement>();
+                  try {
+                    EditorUtil.withEditor(x, file, pos, editor -> {
+                      var targetElement = TargetElementUtil.findTargetElement(editor, TargetElementUtil.getInstance().getAllAccepted());
+                      targetElementRef.set(targetElement);
+                    });
+                  } finally {
+                    Disposer.dispose(x);
+                  }
+                  var processor = new RenameProcessor(
+                      project,
+                      targetElementRef.get(),
+                      params.getNewName(),
+                      false, false);
+                  Arrays.stream(processor.findUsages()).forEach(usageInfo -> {
+                    LOG.warn(usageInfo.toString());
+                  });
+                }
                 );
               });
 
